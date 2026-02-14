@@ -31,8 +31,8 @@ const int PEN_DOWN_ANGLE = 9;
 const long MAX_SPEED_COUNTS = 5000;
 
 // Settling
-const long SETTLE_THRESHOLD    = 120;  // was 150
-const int  SETTLE_NEEDED       = 5;
+const long SETTLE_THRESHOLD    = 400;  // was 12
+const int  SETTLE_NEEDED       = 1;    // was 5
 const unsigned long SETTLE_TIMEOUT_US = 5000000; // 5s
 
 // Corner Detection

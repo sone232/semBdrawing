@@ -5,7 +5,7 @@ import sys
 import msvcrt
 
 # ============================================================
-# Physical Constants (must match Arduino!)
+# Physical Constants
 # ============================================================
 COM_PORT       = 'COM4'
 BAUD_RATE      = 115200
@@ -14,10 +14,7 @@ L_ARM          = 0.075
 PEN_UP_ANGLE   = 44
 PEN_DOWN_ANGLE = 9
 
-# Timeout & flow control
 MOVE_TIMEOUT   = 60
-BUFFER_HIGH    = 20   # max commands to send ahead
-BUFFER_LOW     = 10   # refill when Arduino buffer drops below this
 
 ser = None
 stopped = False
@@ -72,7 +69,7 @@ def connect():
 
 
 # ============================================================
-# Send command and wait for specific acknowledgment
+# Send command and wait for acknowledgment
 # ============================================================
 def send_command(cmd, ack, timeout=5):
     ser.reset_input_buffer()
@@ -89,9 +86,7 @@ def send_command(cmd, ack, timeout=5):
 
 
 # ============================================================
-# Read any pending lines from Arduino (non-blocking)
-# Updates arduino_buf_count if BUF: message received
-# Returns list of received lines
+# Drain serial — read all pending lines, update buffer count
 # ============================================================
 def drain_serial():
     global arduino_buf_count
@@ -120,7 +115,7 @@ def drain_serial():
 def calibrate():
     global motors_engaged
     print("=== Calibration ===")
-    print("Measure string length from each motor spool to the pulley on the robot.")
+    print("Measure string length from each motor spool to the pulley.")
     try:
         l1 = float(input("  L1 - left string (meters):  "))
         l2 = float(input("  L2 - right string (meters): "))
@@ -128,22 +123,19 @@ def calibrate():
         print("Invalid input!")
         return None
 
-    # Total cable length = measured string + arm offset
     z1 = l1 + L_ARM
     z2 = l2 + L_ARM
 
-    # Compute initial (x, y) from cable lengths
     x_init = (z1**2 - z2**2 + BASE_WIDTH**2) / (2 * BASE_WIDTH)
     y_sq = z1**2 - x_init**2
     if y_sq < 0:
-        print("ERROR: Impossible string lengths! Check measurements.")
+        print("ERROR: Impossible string lengths!")
         return None
     y_init = math.sqrt(y_sq)
 
     print(f"  Cable lengths: Z1={z1:.4f}m, Z2={z2:.4f}m")
     print(f"  Computed position: X={x_init:.4f}m, Y={y_init:.4f}m")
 
-    # Send calibration data to Arduino
     response = send_command(f"CAL:{x_init:.5f},{y_init:.5f}", "CALIBRATED", timeout=5)
     if response:
         motors_engaged = True
@@ -151,7 +143,7 @@ def calibrate():
         print("  Calibration complete!\n")
         return (x_init, y_init)
     else:
-        print("  WARNING: No calibration acknowledgment from Arduino!")
+        print("  WARNING: No calibration acknowledgment!")
         return None
 
 
@@ -161,11 +153,9 @@ def calibrate():
 def set_pen(angle):
     label = 'UP' if angle == PEN_UP_ANGLE else 'DOWN'
     ser.reset_input_buffer()
-
     for attempt in range(3):
         ser.write(f"P:{angle}\n".encode())
         ser.flush()
-
         deadline = time.time() + 3
         while time.time() < deadline:
             if ser.in_waiting:
@@ -173,19 +163,16 @@ def set_pen(angle):
                 if line == "P_OK":
                     return True
                 elif line.startswith("Q_OK"):
-                    # Pen command was queued, wait for P_OK
                     pass
             time.sleep(0.01)
-
         print(f"  Pen {label} retry {attempt+1}...")
         ser.reset_input_buffer()
-
-    print(f"  WARNING: Pen {label} failed after 3 attempts!")
+    print(f"  WARNING: Pen {label} failed!")
     return False
 
 
 # ============================================================
-# Ensure motors are engaged
+# Ensure motors engaged
 # ============================================================
 def ensure_engaged():
     global motors_engaged, stopped
@@ -201,7 +188,7 @@ def ensure_engaged():
 
 
 # ============================================================
-# Send a single move command and handle flow control
+# Send a move command with flow control
 # ============================================================
 def send_move(x, y):
     global arduino_buf_count
@@ -218,9 +205,8 @@ def send_move(x, y):
         if check_stop():
             return False
 
-        # If buffer is almost full, wait before sending
+        # Wait if buffer is full
         if not cmd_sent and arduino_buf_count >= 20:
-            # Read one line at a time (never drain — it eats Q_OK!)
             if ser.in_waiting:
                 line = ser.readline().decode(errors='ignore').strip()
                 if line.startswith("BUF:") or line.startswith("Q_OK:"):
@@ -233,60 +219,51 @@ def send_move(x, y):
             time.sleep(0.02)
             continue
 
-        # Send the command (only once per retry)
         if not cmd_sent:
             ser.write(cmd.encode())
             ser.flush()
             cmd_sent = True
 
-        # Wait for response — read ONE line at a time
+        # Wait for Q_OK
         deadline = time.time() + 10
         while time.time() < deadline:
             if check_stop():
                 return False
-
             if ser.in_waiting:
                 line = ser.readline().decode(errors='ignore').strip()
                 if not line:
                     continue
-
                 if line.startswith("Q_OK:"):
                     try:
                         arduino_buf_count = int(line[5:])
                     except ValueError:
                         pass
                     return True
-
                 elif line == "ERROR:BUF_FULL":
                     retry_count += 1
-                    cmd_sent = False  # need to resend
+                    cmd_sent = False
                     time.sleep(0.1)
                     break
-
                 elif line == "D":
-                    # Previous move done — just decrement, keep waiting
                     arduino_buf_count = max(0, arduino_buf_count - 1)
-
                 elif line == "P_OK":
                     pass
-
                 elif line.startswith("BUF:"):
                     try:
                         arduino_buf_count = int(line[4:])
                     except ValueError:
                         pass
-
                 elif "ERROR" in line or "STOPPED" in line:
                     print(f"\n  Arduino error: {line}")
                     return False
-
             time.sleep(0.005)
         else:
-            print(f"\n  TIMEOUT sending move G:{x:.4f},{y:.4f}")
+            print(f"\n  TIMEOUT sending G:{x:.4f},{y:.4f}")
             return False
 
-    print(f"\n  FAILED after {max_retries} retries: G:{x:.4f},{y:.4f}")
+    print(f"\n  FAILED after {max_retries} retries")
     return False
+
 
 # ============================================================
 # Wait for all queued moves to finish
@@ -294,7 +271,6 @@ def send_move(x, y):
 def wait_all_done(timeout=120):
     global arduino_buf_count
 
-    # If nothing was sent, nothing to wait for
     drain_serial()
     if arduino_buf_count == 0 and not stopped:
         return True
@@ -303,17 +279,14 @@ def wait_all_done(timeout=120):
     while time.time() < deadline:
         if check_stop():
             return False
-
         if ser.in_waiting:
             line = ser.readline().decode(errors='ignore').strip()
             if not line:
                 continue
-
             if line == "D":
                 drain_serial()
                 if arduino_buf_count == 0:
                     return True
-
             elif line.startswith("BUF:"):
                 try:
                     arduino_buf_count = int(line[4:])
@@ -321,15 +294,15 @@ def wait_all_done(timeout=120):
                     pass
                 if arduino_buf_count == 0:
                     return True
-
             elif "ERROR" in line or "STOPPED" in line:
                 print(f"\n  Arduino: {line}")
                 return False
-
         time.sleep(0.01)
 
     print("  WARNING: wait_all_done timeout!")
     return False
+
+
 # ============================================================
 # Load path file
 # ============================================================
@@ -341,7 +314,6 @@ def load_path(filename="path.txt"):
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
-
                 if line == "PEN_UP":
                     commands.append(("PEN", PEN_UP_ANGLE))
                 elif line == "PEN_DOWN":
@@ -350,6 +322,14 @@ def load_path(filename="path.txt"):
                     parts = line[2:].split(',')
                     if len(parts) == 2:
                         commands.append(("MOVE", float(parts[0]), float(parts[1])))
+                else:
+                    # Try plain x,y format
+                    parts = line.split(',')
+                    if len(parts) == 2:
+                        try:
+                            commands.append(("MOVE", float(parts[0]), float(parts[1])))
+                        except ValueError:
+                            pass
         print(f"  Loaded {len(commands)} commands from {filename}")
         return commands
     except Exception as e:
@@ -358,10 +338,11 @@ def load_path(filename="path.txt"):
 
 
 # ============================================================
-# Main Drawing Sequence (Streaming with Flow Control)
+# Main Drawing Sequence
 # ============================================================
 def run_draw_sequence(commands):
     global stopped, arduino_buf_count
+
     if not ensure_engaged():
         return
 
@@ -382,18 +363,16 @@ def run_draw_sequence(commands):
         cmd_type = commands[i][0]
 
         if cmd_type == "PEN":
-            # Before sending pen command, wait for all moves to finish
+            # Wait for all moves to finish before pen change
             wait_all_done(timeout=60)
 
             angle = commands[i][1]
             label = "UP" if angle == PEN_UP_ANGLE else "DOWN"
             print(f"\n  PEN {label}", flush=True)
 
-            # Send pen command directly (bypassing buffer for safety)
             ser.write(f"P:{angle}\n".encode())
             ser.flush()
 
-            # Wait for P_OK
             deadline = time.time() + 5
             got_ok = False
             while time.time() < deadline:
@@ -403,7 +382,6 @@ def run_draw_sequence(commands):
                         got_ok = True
                         break
                     elif line.startswith("Q_OK"):
-                        # Queued, now wait for P_OK
                         pass
                 time.sleep(0.01)
 
@@ -417,20 +395,18 @@ def run_draw_sequence(commands):
             x, y = commands[i][1], commands[i][2]
             done_moves += 1
 
-# הדפסה רק פעם ב-20 פקודות כדי למנוע איטיות
-            if done_moves % 20 == 0:
-                print(f"\r  [{done_moves}/{move_count}] G:{c1},{c2} (skip:{skipped})     ", end="", flush=True)
+            if done_moves % 20 == 0 or done_moves <= 3:
+                print(f"\r  [{done_moves}/{move_count}] ({x:.4f},{y:.4f})     ", end="", flush=True)
+
             if not send_move(x, y):
                 print(f"\n  FAILED at move {done_moves}")
                 set_pen(PEN_UP_ANGLE)
                 return
 
             i += 1
-
-            # Drain serial to keep buffer count updated
             drain_serial()
 
-    # Wait for all remaining moves to complete
+    # Wait for remaining moves
     print("\n\n  Waiting for remaining moves...")
     wait_all_done(timeout=120)
 
@@ -465,6 +441,7 @@ if __name__ == "__main__":
         print("  [1] Load & Draw 'path.txt'")
         print("  [2] Release Motors")
         print("  [3] Recalibrate")
+        print("  [4] Query Position")
         print("  [Q] Quit")
         print("=" * 40)
         c = input("> ").upper().strip()
@@ -478,6 +455,12 @@ if __name__ == "__main__":
             release_motors()
         elif c == '3':
             init_pos = calibrate()
+        elif c == '4':
+            response = send_command("POS", "POS:", timeout=3)
+            if response:
+                print(f"  Arduino reports: {response}")
+            else:
+                print("  No response.")
         elif c == 'Q':
             break
 

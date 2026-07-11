@@ -1,11 +1,11 @@
 """
-image.py — Convert image to drawing path for V-Plotter robot
-Generates path.txt compatible with newnoder.py
+image_processing.py — Convert image to drawing path for V-Plotter robot
+Generates path.txt, consumed by main.py
 
 Usage:
-    python image.py <image_file> [fraction]
-    python image.py starbucks.jpg
-    python image.py starbucks.jpg 0.7
+    python image_processing.py <image_file> [fraction]
+    python image_processing.py starbucks.jpg
+    python image_processing.py starbucks.jpg 0.7
 """
 
 import cv2
@@ -27,9 +27,9 @@ Y_MIN_DRAW    = 0.10        # Don't draw above 10cm from top
 FRACTION      = 0.9         # Use 50% of safe zone  // was 0.7
 MERGE_GAP_PIX = 3           # Max pixel gap to merge segments
 MIN_SEGMENT_LEN = 3         # Discard segments shorter than this
-RESAMPLE_DIST    = 0.005     # היה 0.003 → 2mm
-SIMPLIFY_EPSILON = 0.0002    # היה 0.0004 → פי 2 יותר מדויק
-IMAGE_MAX_DIM    = 600       # היה 500
+RESAMPLE_DIST    = 0.005
+SIMPLIFY_EPSILON = 0.0002
+IMAGE_MAX_DIM    = 600
 
 def simplify_segment(segment, epsilon=SIMPLIFY_EPSILON):
     """
@@ -60,7 +60,6 @@ def process_image(image_path):
                          interpolation=cv2.INTER_AREA)
         print(f"      → Resized: {w}x{h} → {img.shape[1]}x{img.shape[0]}")
 
-    # ... שאר הפונקציה נשארת אותו דבר ...
     # --- Grayscale ---
     if len(img.shape) == 3:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -440,8 +439,7 @@ def plot_meters(segments, title="Drawing Preview"):
 def write_path(segments, filename="path.txt"):
     """
     Write drawing commands to path.txt.
-    Format compatible with newnoder.py:
-      PEN_UP / PEN_DOWN / G:x,y
+    Format: PEN_UP / PEN_DOWN / G:x,y
     """
     total_moves = 0
 
